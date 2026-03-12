@@ -13,17 +13,22 @@ import time
 import urllib.parse
 import urllib.request
 from io import BytesIO
-
+from PIL import Image
+import filetype
 
 # config
-socket.setdefaulttimeout(2)
+socket.setdefaulttimeout(10)
 
 output_dir = './bing'  # default output dir
 tried_urls = []
 image_md5s = {}
 in_progress = 0
-urlopenheader = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/64.0.3282.140 Safari/537.36 Edge/17.17134'}
-
+urlopenheader = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://www.bing.com/'
+}
 
 # Naive URL encoding
 def _encode_url(url):
@@ -43,6 +48,11 @@ def download(pool_sema: threading.Semaphore, img_sema: threading.Semaphore, url:
     global image_md5s
     global in_progress
     global urlopenheader
+
+    # Early out if limit reached before this thread acquires processing power
+    if limit is not None and len(tried_urls) >= limit:
+        return
+
     if url in tried_urls:
         print('SKIP: Already checked url, skipping')
         return
@@ -65,38 +75,56 @@ def download(pool_sema: threading.Semaphore, img_sema: threading.Semaphore, url:
     try:
         request = urllib.request.Request(url, None, urlopenheader)
         image = urllib.request.urlopen(request).read()
-        imgtype = imghdr.what(BytesIO(image), image)
-        if not imgtype:
+        kind = filetype.guess(image)
+        if kind is None:
             print('SKIP: Invalid image, not saving ' + name)
             return
 
         # Attach a file extension based on an image header
-        ext = 'jpg' if imgtype == 'jpeg' else imgtype
-        filename = name + '.' + ext
+        ext = kind.extension
+        if ext == 'jpeg':
+            ext = 'jpg'
 
         md5_key = hashlib.md5(image).hexdigest()
         if md5_key in image_md5s:
             print('SKIP: Image is a duplicate of ' + image_md5s[md5_key] + ', not saving ' + filename)
             return
 
-        i = 0
-        while os.path.exists(os.path.join(output_dir, filename)):
-            if hashlib.md5(open(os.path.join(output_dir, filename), 'rb').read()).hexdigest() == md5_key:
-                print('SKIP: Already downloaded ' + filename + ', not saving')
-                return
-            i += 1
-            filename = "%s-%d.%s" % (name, i, ext)
-
-        image_md5s[md5_key] = filename
-
         img_sema.acquire()
         acquired_img_sema = True
+        
         if limit is not None and len(tried_urls) >= limit:
             return
 
-        imagefile = open(os.path.join(output_dir, filename), 'wb')
-        imagefile.write(image)
-        imagefile.close()
+        if prefix is not None:
+            i = 1
+            filename = f"{prefix}_1_{i}.jpg"
+            while os.path.exists(os.path.join(output_dir, filename)):
+                if hashlib.md5(open(os.path.join(output_dir, filename), 'rb').read()).hexdigest() == md5_key:
+                    print('SKIP: Already downloaded ' + filename + ', not saving')
+                    return
+                i += 1
+                filename = f"{prefix}_1_{i}.jpg"
+        else:
+            filename = name + '.jpg'
+            i = 0
+            while os.path.exists(os.path.join(output_dir, filename)):
+                if hashlib.md5(open(os.path.join(output_dir, filename), 'rb').read()).hexdigest() == md5_key:
+                    print('SKIP: Already downloaded ' + filename + ', not saving')
+                    return
+                i += 1
+                filename = "%s-%d.jpg" % (name, i)
+
+        image_md5s[md5_key] = filename
+
+        out_path = os.path.join(output_dir, filename)
+        pil_image = Image.open(BytesIO(image))
+        
+        if pil_image.mode in ("RGBA", "P"):
+            pil_image = pil_image.convert("RGB")
+            
+        pil_image.save(out_path, format="JPEG", quality=95)
+        
         print(" OK : " + filename)
         tried_urls.append(url)
     except Exception as e:
@@ -116,28 +144,38 @@ def fetch_images_from_keyword(pool_sema: threading.Semaphore, img_sema: threadin
     global urlopenheader
     current = 1
     last = ''
+    active_threads = []
     while True:
         time.sleep(0.1)
 
         request_url = 'https://www.bing.com/images/async?q=' + urllib.parse.quote_plus(keyword) + '&first=' + str(
             current) + '&count=35&qft=' + ('' if filters is None else filters)
         request = urllib.request.Request(request_url, None, headers=urlopenheader)
-        response = urllib.request.urlopen(request)
+        response = urllib.request.urlopen(request, context=ctx)
         html = response.read().decode('utf8')
         links = re.findall('murl&quot;:&quot;(.*?)&quot;', html)
         try:
-            if links[-1] == last:
-                return
             for index, link in enumerate(links):
                 if limit is not None and len(tried_urls) >= limit:
-                    exit(0)
-                t = threading.Thread(target=download, args=(pool_sema, img_sema, link, output_dir, limit))
+                    break
+                t = threading.Thread(target=download, args=(pool_sema, img_sema, link, output_dir, limit, prefix))
                 t.start()
+                active_threads.append(t)
                 current += 1
+                
+            if limit is not None and len(tried_urls) >= limit:
+                break
+                
+            if not links or links[-1] == last:
+                break
             last = links[-1]
+            
         except IndexError:
             print('FAIL: No search results for "{0}"'.format(keyword))
-            return
+            break
+            
+    for t in active_threads:
+        t.join()
 
 
 def backup_history(*args):
@@ -174,7 +212,7 @@ def main():
                         required=False)
     parser.add_argument('--limit', help='Make sure not to search for more than specified amount of images.',
                         required=False, type=int)
-    parser.add_argument('-t', '--threads', help='Number of threads', type=int, default=20)
+    parser.add_argument('-t', '--threads', help='Number of threads', type=int, default=10)
     args = parser.parse_args()
     print(vars(args))
     args.search_string = ' '.join(args.search_string)
@@ -210,9 +248,10 @@ def main():
             output_sub_dir = os.path.join(output_dir_origin, keyword.strip().replace(' ', '_'))
             if not os.path.exists(output_sub_dir):
                 os.makedirs(output_sub_dir)
+            print(f"\nFetching images for: {keyword}")
             fetch_images_from_keyword(pool_sema, img_sema, keyword, output_sub_dir, args.filters, args.limit)
             backup_history()
-            time.sleep(10)
+            time.sleep(5)
         inputFile.close()
 
 
