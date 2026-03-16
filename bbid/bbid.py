@@ -46,7 +46,7 @@ def _encode_url(url):
     return encoded_url
 
 
-def download(pool_sema: threading.Semaphore, img_sema: threading.Semaphore, url: str, output_dir: str, limit: int):
+def download(pool_sema: threading.Semaphore, img_sema: threading.Semaphore, url: str, output_dir: str, limit: int, prefix=None):
     global tried_urls
     global image_md5s
     global in_progress
@@ -140,7 +140,7 @@ def download(pool_sema: threading.Semaphore, img_sema: threading.Semaphore, url:
 
 
 def fetch_images_from_keyword(pool_sema: threading.Semaphore, img_sema: threading.Semaphore, keyword: str,
-                              output_dir: str, filters: str, limit: int):
+                              output_dir: str, filters: str, limit: int, prefix=None):
     global tried_urls
     global image_md5s
     global in_progress
