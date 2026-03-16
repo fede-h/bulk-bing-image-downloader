@@ -6,11 +6,11 @@ with open("README.md", "r") as fh:
 setuptools.setup(
     name="bbid",
     version="1.0",
-    author="Gabriel Ostrolucký",
+    author="Federico Hörl",
     description='Script to download images from Bing search engine',
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/ostrolucky/Bulk-Bing-Image-downloader",
+    url="https://github.com/fede-h/Bulk-Bing-Image-downloader",
     packages=setuptools.find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -24,5 +24,5 @@ setuptools.setup(
         ]
     },
     python_requires='>=3',
-    install_requires=[],
+    install_requires=['pillow', 'filetype'],
 )
