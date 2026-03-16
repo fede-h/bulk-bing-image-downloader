@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
-import imghdr
 import os
 import pickle
 import posixpath
 import re
 import signal
 import socket
+import ssl
 import threading
 import time
 import urllib.parse
@@ -18,6 +18,9 @@ import filetype
 
 # config
 socket.setdefaulttimeout(10)
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
 
 output_dir = './bing'  # default output dir
 tried_urls = []
